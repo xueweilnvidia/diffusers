@@ -877,24 +877,25 @@ def main():
             loss.backward()
             # if accelerator.sync_gradients:
             #     accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             # if accelerator.sync_gradients:
-            #     if args.use_ema:
-            #         ema_unet.step(unet.parameters())
-            #     progress_bar.update(1)
-            #     global_step += 1
-            #     accelerator.log({"train_loss": train_loss}, step=global_step)
-            #     train_loss = 0.0
+            if args.use_ema:
+                ema_unet.step(unet.parameters())
+            progress_bar.update(1)
+            global_step += 1
+            accelerator.log({"train_loss": train_loss}, step=global_step)
+            train_loss = 0.0
 
-            #     if global_step % args.checkpointing_steps == 0:
-            #         if accelerator.is_main_process:
-            #             save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-            #             accelerator.save_state(save_path)
-            #             logger.info(f"Saved state to {save_path}")
+            # if global_step % args.checkpointing_steps == 0:
+            #     if accelerator.is_main_process:
+            #         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+            #         accelerator.save_state(save_path)
+            #         logger.info(f"Saved state to {save_path}")
 
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
