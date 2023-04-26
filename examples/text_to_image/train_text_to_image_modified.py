@@ -808,7 +808,7 @@ def main():
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             # Skip steps until we reach the resumed step
-            batch = batch.to("cuda")
+            # batch = batch.to("cuda")
             if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 if step % args.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
@@ -816,7 +816,7 @@ def main():
 
             # with accelerator.accumulate(unet):
                 # Convert images to latent space
-            latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
+            latents = vae.encode(batch["pixel_values"].to(weight_dtype).to("cuda")).latent_dist.sample()
             latents = latents * vae.config.scaling_factor
 
             # Sample noise that we'll add to the latents
