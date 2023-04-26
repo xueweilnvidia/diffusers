@@ -713,9 +713,9 @@ def main():
     #     unet, optimizer, train_dataloader, lr_scheduler
     # )
     unet = unet.to("cuda")
-    optimizer = optimizer.to("cuda")
+    # optimizer = optimizer.to("cuda")
     # train_dataloader = train_dataloader.to("cuda")
-    lr_scheduler = lr_scheduler.to("cuda")
+    # lr_scheduler = lr_scheduler.to("cuda")
 
 
 
