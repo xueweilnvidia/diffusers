@@ -837,7 +837,7 @@ def main():
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
             # Get the text embedding for conditioning
-            encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+            encoder_hidden_states = text_encoder(batch["input_ids"].to("cuda"))[0]
 
             # Get the target for loss depending on the prediction type
             if noise_scheduler.config.prediction_type == "epsilon":
