@@ -580,7 +580,7 @@ def main():
 
     #     optimizer_cls = bnb.optim.AdamW8bit
     # else:
-        optimizer_cls = torch.optim.AdamW
+    optimizer_cls = torch.optim.AdamW
 
     optimizer = optimizer_cls(
         unet.parameters(),
