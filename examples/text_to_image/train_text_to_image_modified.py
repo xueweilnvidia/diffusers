@@ -595,6 +595,8 @@ def main():
 
     # In distributed training, the load_dataset function guarantees that only one local process can concurrently
     # download the dataset.
+    print("dataset name: ", args.dataset_name)
+    print("dataset_config_name: ", args.dataset_config_name)
     if args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         dataset = load_dataset(
