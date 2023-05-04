@@ -818,7 +818,9 @@ def main():
 
             # with accelerator.accumulate(unet):
                 # Convert images to latent space
+            print("pixel shape: ", batch["pixel_values"].shape)
             latents = vae.encode(batch["pixel_values"].to(weight_dtype).to("cuda")).latent_dist.sample()
+            print("latent shape: ", latents.shape)
             latents = latents * vae.config.scaling_factor
 
             # Sample noise that we'll add to the latents
