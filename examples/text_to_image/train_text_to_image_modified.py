@@ -856,6 +856,7 @@ def main():
 
             if args.snr_gamma is None:
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                print("no snr")
             else:
                 # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                 # Since we predict the noise instead of x_0, the original formulation is slightly changed.
