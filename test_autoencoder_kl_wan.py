@@ -12,6 +12,7 @@ then compares outputs numerically (max / mean abs+rel diff and allclose at
 several tolerances).
 
 Usage:
+    install flashinfer in https://github.com/xueweilnvidia/flashinfer/tree/vae_new 
     python test_autoencoder_kl_wan.py \
         --model-id ../Wan2.2-T2V-A14B-Diffusers --subfolder vae
 """
