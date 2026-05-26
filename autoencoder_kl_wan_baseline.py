@@ -15,36 +15,20 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from flashinfer.norm import fused_rmsnorm_silu as _fused_rmsnorm_silu
 
-from ...configuration_utils import ConfigMixin, register_to_config
-from ...loaders import FromOriginalModelMixin
-from ...utils import logging
-from ...utils.accelerate_utils import apply_forward_hook
-from ..activations import get_activation
-from ..modeling_outputs import AutoencoderKLOutput
-from ..modeling_utils import ModelMixin
-from .vae import AutoencoderMixin, DecoderOutput, DiagonalGaussianDistribution
-
-import nvtx
+from diffusers.configuration_utils import ConfigMixin, register_to_config
+from diffusers.loaders import FromOriginalModelMixin
+from diffusers.utils import logging
+from diffusers.utils.accelerate_utils import apply_forward_hook
+from diffusers.models.activations import get_activation
+from diffusers.models.modeling_outputs import AutoencoderKLOutput
+from diffusers.models.modeling_utils import ModelMixin
+from diffusers.models.autoencoders.vae import AutoencoderMixin, DecoderOutput, DiagonalGaussianDistribution
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 CACHE_T = 2
-
-
-def _fused_rmsnorm_silu_5d(x: torch.Tensor, gamma: torch.Tensor) -> torch.Tensor:
-    # Channel-dim RMSNorm + SiLU on [B,C,T,H,W] via flashinfer.
-    # When x is channels_last_3d the permute+reshape is zero-copy; otherwise we
-    # force last-dim contiguity (required by the kernel). Output is laid out so
-    # that channels_last_3d is preserved for downstream convs.
-    B, C, T, H, W = x.shape
-    x2 = x.permute(0, 2, 3, 4, 1).reshape(-1, C)
-    if x2.stride(-1) != 1:
-        x2 = x2.contiguous()
-    y2 = _fused_rmsnorm_silu(x2, gamma.view(-1))
-    return y2.view(B, T, H, W, C).permute(0, 4, 1, 2, 3)
 
 
 class AvgDown3D(nn.Module):
@@ -175,21 +159,17 @@ class WanCausalConv3d(nn.Conv3d):
             padding=padding,
         )
 
-        # Temporal padding is asymmetric (causal): keep manual on T.
-        # H/W padding is symmetric — let nn.Conv3d apply it natively (free with
-        # cuDNN channels_last_3d implicit_gemm; also avoids materializing an
-        # H/W-padded buffer that can break channels_last_3d for downstream ops).
-        self._t_pad = 2 * self.padding[0]
-        self.padding = (0, self.padding[1], self.padding[2])
+        # Set up causal padding
+        self._padding = (self.padding[2], self.padding[2], self.padding[1], self.padding[1], 2 * self.padding[0], 0)
+        self.padding = (0, 0, 0)
 
     def forward(self, x, cache_x=None):
-        t_pad = self._t_pad
-        if cache_x is not None and t_pad > 0:
+        padding = list(self._padding)
+        if cache_x is not None and self._padding[4] > 0:
+            cache_x = cache_x.to(x.device)
             x = torch.cat([cache_x, x], dim=2)
-            t_pad -= cache_x.shape[2]
-        if t_pad > 0:
-            with nvtx.annotate(message="CausalConv3d F.pad"):
-                x = F.pad(x, (0, 0, 0, 0, t_pad, 0))
+            padding[4] -= cache_x.shape[2]
+        x = F.pad(x, padding)
         return super().forward(x)
 
 
@@ -363,25 +343,19 @@ class WanResidualBlock(nn.Module):
         self.conv2 = WanCausalConv3d(out_dim, out_dim, 3, padding=1)
         self.conv_shortcut = WanCausalConv3d(in_dim, out_dim, 1) if in_dim != out_dim else nn.Identity()
 
-    @nvtx.annotate(message="WanResidualBlock")
     def forward(self, x, feat_cache=None, feat_idx=[0]):
         # Apply shortcut connection
         h = self.conv_shortcut(x)
 
-        with nvtx.annotate(message="First resnorm"):
-            # First normalization and activation (fused via flashinfer when bf16 on CUDA, no learnable bias)
-            if x.is_cuda and x.dtype == torch.bfloat16 and not isinstance(self.norm1.bias, torch.Tensor):
-                x = _fused_rmsnorm_silu_5d(x, self.norm1.gamma)
-            else:
-                x = self.norm1(x)
-                x = self.nonlinearity(x)
+        # First normalization and activation
+        x = self.norm1(x)
+        x = self.nonlinearity(x)
 
         if feat_cache is not None:
             idx = feat_idx[0]
-            with nvtx.annotate(message="ResidualBlock cache update conv1"):
-                cache_x = x[:, :, -CACHE_T:, :, :].clone()
-                if cache_x.shape[2] < 2 and feat_cache[idx] is not None:
-                    cache_x = torch.cat([feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(cache_x.device), cache_x], dim=2)
+            cache_x = x[:, :, -CACHE_T:, :, :].clone()
+            if cache_x.shape[2] < 2 and feat_cache[idx] is not None:
+                cache_x = torch.cat([feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(cache_x.device), cache_x], dim=2)
 
             x = self.conv1(x, feat_cache[idx])
             feat_cache[idx] = cache_x
@@ -389,13 +363,9 @@ class WanResidualBlock(nn.Module):
         else:
             x = self.conv1(x)
 
-        with nvtx.annotate(message="Second resnorm"):
-            # Second normalization and activation (fused via flashinfer when bf16 on CUDA, no learnable bias)
-            if x.is_cuda and x.dtype == torch.bfloat16 and not isinstance(self.norm2.bias, torch.Tensor):
-                x = _fused_rmsnorm_silu_5d(x, self.norm2.gamma)
-            else:
-                x = self.norm2(x)
-                x = self.nonlinearity(x)
+        # Second normalization and activation
+        x = self.norm2(x)
+        x = self.nonlinearity(x)
 
         # Dropout
         x = self.dropout(x)
@@ -1222,7 +1192,6 @@ class AutoencoderKLWan(ModelMixin, AutoencoderMixin, ConfigMixin, FromOriginalMo
         if self.use_tiling and (width > tile_latent_min_width or height > tile_latent_min_height):
             return self.tiled_decode(z, return_dict=return_dict)
 
-        z = z.contiguous(memory_format=torch.channels_last_3d)
         self.clear_cache()
         x = self.post_quant_conv(z)
         for i in range(num_frame):
